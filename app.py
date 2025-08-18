@@ -103,8 +103,13 @@ elif isinstance(table_block, dict) and table_block.get("categories"):
     container_key = "categories"
 
 if not containers:
-    st.error("No recognizable table structure found under data['table'].")
-    st.stop()
+    # Fallback: check if the root data itself is a table
+    if isinstance(data, dict) and data.get("columns") and data.get("rows"):
+        containers.append(copy.deepcopy(data))
+        container_key = "root"
+    else:
+        st.error("No recognizable table structure found under data['table'] or at the root level.")
+        st.stop()
 
 # ---- Allow selecting which container to edit ----
 st.markdown("---")
@@ -295,6 +300,9 @@ if container_key == "Tables":
     updated_data.setdefault("table", {})["Tables"] = updated_containers
 elif container_key == "categories":
     updated_data.setdefault("table", {})["categories"] = updated_containers
+elif container_key == "root":
+    # Overwrite the root-level table structure
+    updated_data = updated_containers[0]
 else:
     updated_data["table"] = updated_containers[0]
 
@@ -326,4 +334,3 @@ with colA:
 with colB:
     if st.button("🔄 Reset to Original", help="Reload the original uploaded file and discard all changes."):
         st.experimental_rerun()
-
