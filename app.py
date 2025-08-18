@@ -87,25 +87,34 @@ with st.expander("\U0001F50D View Raw JSON", expanded=False):
 # ---- Detect where the tables/categories live ----
 table_block = data.get("table", {})
 containers = []
+container_map = []  # Track (type, index) for each container
 container_key = None
 
 # Always include the top-level table if it has rows/columns
 if isinstance(table_block, dict) and (table_block.get("rows") or table_block.get("columns") or table_block.get("column_header")):
     containers.append(copy.deepcopy(table_block))
+    container_map.append(("table", None))
     container_key = "single"
+    # If the table has categories, add them as well
+    if table_block.get("categories") and isinstance(table_block["categories"], list):
+        for idx, cat in enumerate(table_block["categories"]):
+            # Avoid adding the main table again if it's present in categories
+            if cat is table_block or cat == table_block:
+                continue
+            containers.append(copy.deepcopy(cat))
+            container_map.append(("category", idx))
+        container_key = "categories"
 
 # Add sub-tables if present
 if isinstance(table_block, dict) and table_block.get("Tables"):
     containers.extend(table_block.get("Tables"))
     container_key = "Tables"
-elif isinstance(table_block, dict) and table_block.get("categories"):
-    containers.extend(table_block.get("categories"))
-    container_key = "categories"
 
 if not containers:
     # Fallback: check if the root data itself is a table
     if isinstance(data, dict) and data.get("columns") and data.get("rows"):
         containers.append(copy.deepcopy(data))
+        container_map.append(("root", None))
         container_key = "root"
     else:
         st.error("No recognizable table structure found under data['table'] or at the root level.")
@@ -296,15 +305,17 @@ updated_table["rows"] = rebuilt_rows
 updated_containers[selected_index] = updated_table
 
 updated_data = dict(data)
-if container_key == "Tables":
-    updated_data.setdefault("table", {})["Tables"] = updated_containers
-elif container_key == "categories":
-    updated_data.setdefault("table", {})["categories"] = updated_containers
-elif container_key == "root":
-    # Overwrite the root-level table structure
-    updated_data = updated_containers[0]
-else:
-    updated_data["table"] = updated_containers[0]
+container_type, category_idx = container_map[selected_index]
+if container_type == "table":
+    updated_data["table"] = updated_table
+elif container_type == "category":
+    updated_data.setdefault("table", {})
+    if "categories" in updated_data["table"] and isinstance(updated_data["table"]["categories"], list):
+        updated_data["table"]["categories"][category_idx] = updated_table
+    else:
+        updated_data["table"]["categories"] = [updated_table]
+elif container_type == "root":
+    updated_data = updated_table
 
 
 if isinstance(updated_data.get("table"), dict) and updated_data["table"].get("plan_id") is not None:
@@ -334,3 +345,4 @@ with colA:
 with colB:
     if st.button("🔄 Reset to Original", help="Reload the original uploaded file and discard all changes."):
         st.experimental_rerun()
+
