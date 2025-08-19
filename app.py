@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import copy
 
-# ---- Custom CSS for polish ----
+#Custom CSS for polish ----
 st.markdown(
     """
     <style>
@@ -21,20 +21,22 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- Sidebar ----
+# Sidebar ----
 st.sidebar.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", width=180)
 
-st.sidebar.markdown("""
+st.sidebar.markdown(
+            """
             ### 📝 Human Feedback Table Editor
             - Upload your JSON file
             - Select a category
             - Edit headers, plan and table cells
             - Download the updated JSON
-            """)
+            """
+        )
 
 st.sidebar.info("All changes are local until you download the file.")
 
-# ---- Page Setup ----
+#  Page Setup ----
 st.set_page_config(page_title="Human Feedback Editor", layout="wide")
 st.title("🧑‍💻 Human Review: SPD Table Editor")
 st.markdown(
@@ -46,7 +48,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- Upload Multiple JSONs ----
+#  Upload Multiple JSONs ----
 st.markdown("---")
 with st.container():
     st.subheader("\U0001F4E4Upload JSON files")
@@ -60,7 +62,7 @@ with st.container():
         st.info("Please upload at least one JSON file to begin.")
         st.stop()
 
-# ---- Display all uploaded JSONs with filenames ----
+# Display all uploaded JSONs with filenames ----
 file_data = []
 for uploaded_file in uploaded_files:
     try:
@@ -69,7 +71,7 @@ for uploaded_file in uploaded_files:
     except Exception as e:
         st.error(f"Failed to parse {uploaded_file.name}: {e}")
 
-# ---- Select which file to edit ----
+#  Select which file to edit ----
 st.markdown("---")
 st.subheader("✏️ Select a file to edit")
 file_names = [f["name"] for f in file_data]
@@ -78,14 +80,14 @@ selected_file = file_data[selected_file_idx]
 data = selected_file["data"]
 uploaded_file = selected_file["file"]
 
-# ---- Load and Parse JSON ----
+# Load and Parse JSON ----
 st.success(f"JSON loaded successfully from {uploaded_file.name}.")
 
-# ---- Raw JSON view ----
+# Raw JSON view ----
 with st.expander("\U0001F50D View Raw JSON", expanded=False):
     st.json(data)
 
-# ---- New schema support ----
+#  New schema support 
 table_block = data.get("table", {})
 containers = []
 container_map = []
@@ -111,7 +113,7 @@ if not containers:
     st.error("No recognizable table structure found under data['table'] or at the root level.")
     st.stop()
 
-# ---- Allow selecting which container to edit ----
+# Allow selecting which container to edit 
 st.markdown("---")
 st.subheader("\U0001F4C1 Select Category")
 container_labels = []
@@ -139,7 +141,7 @@ selected_index = st.selectbox(
 
 table_data = containers[selected_index]
 
-# ---- Editable metadata ----
+# Editable metadata 
 st.markdown("---")
 st.subheader("📝 Headers")
 col1, col2 = st.columns([1,1])
@@ -156,7 +158,7 @@ with col2:
                                     key="table_header_input", 
                                     help="Edit the header for this table/category.")
 
-# ---- Column headers extraction ----
+# Column headers extraction
 def make_unique_names(headers):
     seen = {}
     unique = []
@@ -171,9 +173,8 @@ def make_unique_names(headers):
         unique.append(name)
     return unique
 
-raw = table_data.get("columns")
 rows = table_data.get("rows", [])
-raw = table_data.get("column_header") or table_data.get("columns")
+raw = table_data.get("column_header") 
 
 # For new schema, column_header is always a list
 if raw and isinstance(raw, list):
@@ -196,10 +197,52 @@ if len(headers) < max_cols:
     headers = headers + ["" for _ in range(max_cols - len(headers))]
 unique_colnames = make_unique_names(headers)
 
-# ---- Editable column headers ----
+
+# Editable column headers with session state 
 st.markdown("---")
 st.subheader("🖊️ Columns")
-headers_df = pd.DataFrame([headers], columns=unique_colnames)
+add_col = st.button("➕ Add Column", key="add_col_btn", help="Add a new empty column to the table.")
+if "column_header" not in st.session_state:
+    st.session_state["column_header"] = headers
+
+if add_col:
+    new_col_name = f"Column {len(st.session_state['column_header'])+1}"
+    st.session_state["column_header"].append(new_col_name)
+    st.session_state["df"][new_col_name] = ""
+    st.session_state["df"].columns = st.session_state["column_header"]
+
+if "df" not in st.session_state:
+    # Build dataframe from rows (AFTER editing headers)
+    orig_rows = table_data.get("rows") or []
+    st.session_state["row_format"] = "list"
+    if len(orig_rows) > 0 and isinstance(orig_rows[0], dict):
+        st.session_state["row_format"] = "dict"
+    normalized_rows = []
+    for r in orig_rows:
+        if st.session_state["row_format"] == "list":
+            key = r[0] if len(r) > 0 else ""
+            vals = r[1:]
+            expected_vals = len(st.session_state["column_header"]) - 1
+            vals = vals[:expected_vals]
+            while len(vals) < expected_vals:
+                vals.append("")
+            row_list = [key] + vals
+            normalized_rows.append(row_list)
+        else:
+            key = r.get("key", "")
+            vals = list(r.get("values") or [])
+            expected_vals = len(st.session_state["column_header"]) - 1
+            vals = vals[:expected_vals]
+            while len(vals) < expected_vals:
+                vals.append("")
+            row_list = [key] + vals
+            normalized_rows.append(row_list)
+    if len(normalized_rows) == 0:
+        st.session_state["df"] = pd.DataFrame(columns=unique_colnames)
+    else:
+        st.session_state["df"] = pd.DataFrame(normalized_rows, columns=unique_colnames).fillna("")
+
+headers_df = pd.DataFrame([st.session_state["column_header"]], columns=make_unique_names(st.session_state["column_header"]))
 st.caption("Edit the column headers below. These will be used as the first row in your table.")
 edited_headers = st.data_editor(
     headers_df,
@@ -207,41 +250,9 @@ edited_headers = st.data_editor(
     use_container_width=True,
     key="header_editor",
 )
-headers = edited_headers.iloc[0].tolist()
+st.session_state["column_header"] = edited_headers.iloc[0].tolist()
 
-# ---- Build dataframe from rows (AFTER editing headers) ----
-orig_rows = table_data.get("rows") or []
-row_format = "list"
-if len(orig_rows) > 0 and isinstance(orig_rows[0], dict):
-    row_format = "dict"
-
-normalized_rows = []
-for r in orig_rows:
-    if row_format == "list":
-        key = r[0] if len(r) > 0 else ""
-        vals = r[1:]
-        expected_vals = len(headers) - 1
-        vals = vals[:expected_vals]
-        while len(vals) < expected_vals:
-            vals.append("")
-        row_list = [key] + vals
-        normalized_rows.append(row_list)
-    else:
-        key = r.get("key", "")
-        vals = list(r.get("values") or [])
-        expected_vals = len(headers) - 1
-        vals = vals[:expected_vals]
-        while len(vals) < expected_vals:
-            vals.append("")
-        row_list = [key] + vals
-        normalized_rows.append(row_list)
-
-if len(normalized_rows) == 0:
-    df = pd.DataFrame(columns=unique_colnames)
-else:
-    df = pd.DataFrame(normalized_rows, columns=unique_colnames).fillna("")
-
-# ---- Editable table ----
+# Editable table 
 st.markdown("---")
 st.subheader("📋 Table Cells")
 st.caption("Edit the table cells below. All changes are instantly reflected in the export preview.")
@@ -249,25 +260,29 @@ add_row = st.button("➕ Add Row", key="add_row_btn", help="Add a new empty row 
 add_col = st.button("➕ Add Column", key="add_col_btn", help="Add a new empty column to the table.")
 
 if add_row:
-    empty_row = ["" for _ in range(len(df.columns))]
-    df = pd.concat([df, pd.DataFrame([empty_row], columns=df.columns)], ignore_index=True)
+    empty_row = ["" for _ in range(len(st.session_state["df"].columns))]
+    st.session_state["df"] = pd.concat([st.session_state["df"], 
+                                    pd.DataFrame([empty_row], 
+                                    columns=st.session_state["df"].columns)], 
+                                    ignore_index=True)
 
 if add_col:
-    new_col_name = f"Column {len(df.columns)+1}"
-    df[new_col_name] = ""
-    headers.append("")
-    headers_df = pd.DataFrame([headers], columns=[*df.columns])
+    new_col_name = f"Column {len(st.session_state['column_header'])+1}"
+    st.session_state["column_header"].append(new_col_name)
+    st.session_state["df"][new_col_name] = ""
+    st.session_state["df"].columns = st.session_state["column_header"]
+
 edited_df = st.data_editor(
-    df,
+    st.session_state["df"],
     num_rows="dynamic",
     use_container_width=True,
     key="table_editor",
 )
 
 # Map edited_df columns back to edited headers for export
-edited_df.columns = headers
+edited_df.columns = st.session_state["column_header"]
 
-# ---- Rebuild rows and metadata ----
+# Rebuild rows and metadata 
 rebuilt_rows = []
 for _, row in edited_df.iterrows():
     key_cell = row.get(headers[0], "")
@@ -281,7 +296,7 @@ for _, row in edited_df.iterrows():
         values.append("" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
 
     # Always export as dict if row_format is dict
-    if row_format == "dict":
+    if st.session_state["row_format"] == "dict":
         rebuilt_rows.append({"key": key_str, "values": values})
     else:
         rebuilt_rows.append([key_str] + values)
@@ -292,7 +307,8 @@ updated_table["plan_name"] = new_table_plan_name
 if "row_header" in table_data:
     updated_table["row_header"] = new_table_header
 
-updated_table["columns"] = headers
+if "column_header" in table_data:
+    updated_table["column_header"] = st.session_state["column_header"]
 updated_table["rows"] = rebuilt_rows
 updated_containers[selected_index] = updated_table
 
@@ -316,7 +332,7 @@ if isinstance(updated_data.get("table"), dict) and updated_data["table"].get("pl
 updated_data.setdefault("context_before_table", data.get("context_before_table"))
 updated_data.setdefault("context_after_table", data.get("context_after_table"))
 
-# ---- Review & Export ----
+# Review & Export
 st.markdown("---")
 st.subheader("✅Review & Export")
 
@@ -324,7 +340,7 @@ st.subheader("✅Review & Export")
 plan_metadata = {
     "schema_version": "1.0",
     "extraction_model": "ft:gpt4o:zakipoint-health",
-    "extracted_at": datetime.utcnow().isoformat()
+    "extracted_at": datetime.now(timezone.utc).isoformat()
 }
 
 # Build all subtables for export
@@ -335,7 +351,7 @@ if container_key == "Tables":
             "id": idx,
             "plan_name": tbl.get("plan_name", ""),
             "row_header": tbl.get("row_header", ""),
-            "column_header": tbl.get("columns", []),
+            "column_header": tbl.get("column_header", []),
             "rows": tbl.get("rows", [])
         })
     plan_name = updated_containers[0].get("plan_name", "") if updated_containers else ""
@@ -346,20 +362,29 @@ else:
             "id": idx,
             "plan_name": tbl.get("plan_name", ""),
             "row_header": tbl.get("row_header", ""),
-            "column_header": tbl.get("columns", []),
+            "column_header": tbl.get("column_header", []),
             "rows": tbl.get("rows", [])
         })
     plan_name = updated_table.get("plan_name", "")
 
-plan_document = {
-    "context_before_table": updated_data.get("context_before_table"),
-    "table": {
-        "plan_name": plan_name,
-        "Tables": all_tables
-    },
-    "context_after_table": updated_data.get("context_after_table"),
-    "metadata": plan_metadata
-}
+
+# Preserve original JSON structure for export 
+if "Tables" in data.get("table", {}):
+    plan_document = {
+        "context_before_table": updated_data.get("context_before_table"),
+        "table": {
+            "plan_name": plan_name,
+            "Tables": all_tables
+        },
+        "context_after_table": updated_data.get("context_after_table"),
+        "metadata": plan_metadata
+    }
+elif "categories" in data.get("table", {}):
+    plan_document = copy.deepcopy(updated_data)
+    plan_document["metadata"] = plan_metadata
+else:
+    plan_document = copy.deepcopy(updated_data)
+    plan_document["metadata"] = plan_metadata
 
 with st.expander("👁️ Preview Updated JSON", expanded=False):
     st.json(copy.deepcopy(plan_document))
@@ -377,8 +402,12 @@ with colA:
         mime="application/json",
     )
 
-    # ---- Restart JSON Button ----
+    # Restart JSON Button 
     st.markdown("---")
-    if st.button("🔄 Restart JSON (Reload Original)", key="restart_json_btn", help="Reload the original uploaded JSON file. All unsaved changes will be lost."):
+    
+    if st.button("🔄 Restart JSON (Reload Original)", 
+                key="restart_json_btn", 
+                help="Reload the original uploaded JSON file. All unsaved changes will be lost."):
+        
         st.rerun()
 
