@@ -257,7 +257,7 @@ st.markdown("---")
 st.subheader("📋 Table Cells")
 st.caption("Edit the table cells below. All changes are instantly reflected in the export preview.")
 add_row = st.button("➕ Add Row", key="add_row_btn", help="Add a new empty row to the table.")
-add_col = st.button("➕ Add Column", key="add_col_btn", help="Add a new empty column to the table.")
+add_col = st.button("➕ Add Column", key="add_col_btn_table", help="Add a new empty column to the table.")
 
 if add_row:
     empty_row = ["" for _ in range(len(st.session_state["df"].columns))]
