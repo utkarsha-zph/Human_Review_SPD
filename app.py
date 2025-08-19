@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
-from io import BytesIO
+from datetime import datetime
 import copy
 
 # ---- Custom CSS for polish ----
@@ -23,18 +23,20 @@ st.markdown(
 
 # ---- Sidebar ----
 st.sidebar.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", width=180)
+
 st.sidebar.markdown("""
-### 📝 Human Feedback Table Editor
-- **Upload your JSON file
-- **Select a category
-- **Edit headers, plan and table cells
-- **Download the updated JSON
-""")
+            ### 📝 Human Feedback Table Editor
+            - Upload your JSON file
+            - Select a category
+            - Edit headers, plan and table cells
+            - Download the updated JSON
+            """)
+
 st.sidebar.info("All changes are local until you download the file.")
 
 # ---- Page Setup ----
 st.set_page_config(page_title="Human Feedback Editor", layout="wide")
-st.title("🧑‍💻 Human Review: Table Parsing")
+st.title("🧑‍💻 Human Review: SPD Table Editor")
 st.markdown(
     """
     <div style='color: #64748b; font-size: 1.1rem;'>
@@ -77,48 +79,37 @@ data = selected_file["data"]
 uploaded_file = selected_file["file"]
 
 # ---- Load and Parse JSON ----
-# (No need to re-parse, already done above)
 st.success(f"JSON loaded successfully from {uploaded_file.name}.")
 
 # ---- Raw JSON view ----
 with st.expander("\U0001F50D View Raw JSON", expanded=False):
     st.json(data)
 
-# ---- Detect where the tables/categories live ----
+# ---- New schema support ----
 table_block = data.get("table", {})
 containers = []
-container_map = []  # Track (type, index) for each container
+container_map = []
 container_key = None
 
-# Always include the top-level table if it has rows/columns
-if isinstance(table_block, dict) and (table_block.get("rows") or table_block.get("columns") or table_block.get("column_header")):
+if isinstance(table_block, dict) and table_block.get("Tables") and isinstance(table_block["Tables"], list):
+    for idx, tbl in enumerate(table_block["Tables"]):
+        containers.append(copy.deepcopy(tbl))
+        container_map.append(("Tables", idx))
+    container_key = "Tables"
+elif isinstance(table_block, dict):
     containers.append(copy.deepcopy(table_block))
     container_map.append(("table", None))
     container_key = "single"
-    # If the table has categories, add them as well
     if table_block.get("categories") and isinstance(table_block["categories"], list):
         for idx, cat in enumerate(table_block["categories"]):
-            # Avoid adding the main table again if it's present in categories
             if cat is table_block or cat == table_block:
                 continue
             containers.append(copy.deepcopy(cat))
             container_map.append(("category", idx))
         container_key = "categories"
-
-# Add sub-tables if present
-if isinstance(table_block, dict) and table_block.get("Tables"):
-    containers.extend(table_block.get("Tables"))
-    container_key = "Tables"
-
 if not containers:
-    # Fallback: check if the root data itself is a table
-    if isinstance(data, dict) and data.get("columns") and data.get("rows"):
-        containers.append(copy.deepcopy(data))
-        container_map.append(("root", None))
-        container_key = "root"
-    else:
-        st.error("No recognizable table structure found under data['table'] or at the root level.")
-        st.stop()
+    st.error("No recognizable table structure found under data['table'] or at the root level.")
+    st.stop()
 
 # ---- Allow selecting which container to edit ----
 st.markdown("---")
@@ -127,15 +118,15 @@ container_labels = []
 for idx, c in enumerate(containers):
     if idx == 0 and (c is table_block):
         label = "Top Level Table"
-        pid = c.get("plan_id") or c.get("plan_name") or ""
-        th = c.get("table_header") or c.get("row_header") or ""
-        if pid or th:
-            label += f" (plan_id={pid} | header={th})"
+        p_name = c.get("plan_name") or ""
+        th = c.get("row_header") or ""
+        if p_name or th:
+            label += f" (plan_name={p_name} | header={th})"
         container_labels.append(label)
     else:
-        pid = c.get("plan_id") or c.get("plan_name") or "N/A"
-        th = c.get("table_header") or c.get("row_header") or ""
-        container_labels.append(f"{idx+1}: plan_id={pid} | header={th}")
+        p_name = c.get("plan_name") or "N/A"
+        th = c.get("row_header") or ""
+        container_labels.append(f"{idx+1}: plan_name={p_name} | header={th}")
 
 selected_index = st.selectbox(
     "Select Category",
@@ -153,13 +144,13 @@ st.markdown("---")
 st.subheader("📝 Headers")
 col1, col2 = st.columns([1,1])
 with col1:
-    table_plan_id = table_data.get("plan_id") or ""
-    new_table_plan_id = st.text_input("Table Plan Name", 
-                                    value=str(table_plan_id), 
-                                    key="table_plan_id_input", 
-                                    help="Edit the plan_id for this table/category.")
+    table_plan_name = table_data.get("plan_name") or ""
+    new_table_plan_name = st.text_input("Table Plan Name", 
+                                    value=str(table_plan_name), 
+                                    key="table_plan_name_input", 
+                                    help="Edit the plan_name for this table/category.")
 with col2:
-    table_header = table_data.get("table_header") or ""
+    table_header = table_data.get("row_header") or ""
     new_table_header = st.text_input("Table Header", 
                                     value=str(table_header), 
                                     key="table_header_input", 
@@ -182,38 +173,27 @@ def make_unique_names(headers):
 
 raw = table_data.get("columns")
 rows = table_data.get("rows", [])
+raw = table_data.get("column_header") or table_data.get("columns")
 
-max_cols = 0
-for r in rows:
-    if isinstance(r, list):
-        max_cols = max(max_cols, len(r))
-    elif isinstance(r, dict):
-        vals = r.get("values") or []
-        max_cols = max(max_cols, 1 + len(vals))
-
-headers_list = []
-if raw and isinstance(raw, list) and any(str(h).strip() for h in raw):
+# For new schema, column_header is always a list
+if raw and isinstance(raw, list):
     headers_list = [str(h) for h in raw]
-elif raw and isinstance(raw, str) and raw.strip():
-    headers_list = [h for h in raw.split(",") if h.strip()]
 else:
     headers_list = []
 
+max_cols = 0
+for r in rows:
+    if isinstance(r, dict):
+        vals = r.get("values") or []
+        max_cols = max(max_cols, 1 + len(vals))
+    elif isinstance(r, list):
+        max_cols = max(max_cols, len(r))
+
 if len(headers_list) < max_cols:
     headers_list = headers_list + ["" for _ in range(max_cols - len(headers_list))]
-
-if not headers_list or all(h == "" for h in headers_list):
-    if rows and isinstance(rows[0], list):
-        headers_list = ["" for _ in range(len(rows[0]))]
-    elif rows and isinstance(rows[0], dict):
-        key = rows[0].get("key", "")
-        vals = rows[0].get("values", [])
-        headers_list = ["", *("" for _ in range(len(vals)))]
-
 headers = headers_list[:max_cols] if len(headers_list) > max_cols else headers_list
 if len(headers) < max_cols:
     headers = headers + ["" for _ in range(max_cols - len(headers))]
-
 unique_colnames = make_unique_names(headers)
 
 # ---- Editable column headers ----
@@ -240,17 +220,21 @@ for r in orig_rows:
     if row_format == "list":
         key = r[0] if len(r) > 0 else ""
         vals = r[1:]
+        expected_vals = len(headers) - 1
+        vals = vals[:expected_vals]
+        while len(vals) < expected_vals:
+            vals.append("")
+        row_list = [key] + vals
+        normalized_rows.append(row_list)
     else:
         key = r.get("key", "")
         vals = list(r.get("values") or [])
-
-    expected_vals = len(headers) - 1
-    vals = vals[:expected_vals]
-    while len(vals) < expected_vals:
-        vals.append("")
-
-    row_list = [key] + vals
-    normalized_rows.append(row_list)
+        expected_vals = len(headers) - 1
+        vals = vals[:expected_vals]
+        while len(vals) < expected_vals:
+            vals.append("")
+        row_list = [key] + vals
+        normalized_rows.append(row_list)
 
 if len(normalized_rows) == 0:
     df = pd.DataFrame(columns=unique_colnames)
@@ -261,6 +245,18 @@ else:
 st.markdown("---")
 st.subheader("📋 Table Cells")
 st.caption("Edit the table cells below. All changes are instantly reflected in the export preview.")
+add_row = st.button("➕ Add Row", key="add_row_btn", help="Add a new empty row to the table.")
+add_col = st.button("➕ Add Column", key="add_col_btn", help="Add a new empty column to the table.")
+
+if add_row:
+    empty_row = ["" for _ in range(len(df.columns))]
+    df = pd.concat([df, pd.DataFrame([empty_row], columns=df.columns)], ignore_index=True)
+
+if add_col:
+    new_col_name = f"Column {len(df.columns)+1}"
+    df[new_col_name] = ""
+    headers.append("")
+    headers_df = pd.DataFrame([headers], columns=[*df.columns])
 edited_df = st.data_editor(
     df,
     num_rows="dynamic",
@@ -284,20 +280,16 @@ for _, row in edited_df.iterrows():
         v = row.get(h, "")
         values.append("" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
 
-    if key_str == "" and all(v == "" for v in values):
-        continue
-
-    if row_format == "list":
-        rebuilt_rows.append([key_str] + values)
-    else:
+    # Always export as dict if row_format is dict
+    if row_format == "dict":
         rebuilt_rows.append({"key": key_str, "values": values})
+    else:
+        rebuilt_rows.append([key_str] + values)
 
 updated_containers = list(containers)
 updated_table = dict(table_data)
-updated_table["plan_id"] = new_table_plan_id
-if "table_header" in table_data:
-    updated_table["table_header"] = new_table_header
-else:
+updated_table["plan_name"] = new_table_plan_name
+if "row_header" in table_data:
     updated_table["row_header"] = new_table_header
 
 updated_table["columns"] = headers
@@ -318,8 +310,8 @@ elif container_type == "root":
     updated_data = updated_table
 
 
-if isinstance(updated_data.get("table"), dict) and updated_data["table"].get("plan_id") is not None:
-    updated_data["table"]["plan_id"] = updated_containers[0].get("plan_id")
+if isinstance(updated_data.get("table"), dict) and updated_data["table"].get("plan_name") is not None:
+    updated_data["table"]["plan_name"] = updated_containers[0].get("plan_name")
 
 updated_data.setdefault("context_before_table", data.get("context_before_table"))
 updated_data.setdefault("context_after_table", data.get("context_after_table"))
@@ -327,8 +319,50 @@ updated_data.setdefault("context_after_table", data.get("context_after_table"))
 # ---- Review & Export ----
 st.markdown("---")
 st.subheader("✅Review & Export")
+
+# Build metadata for PlanDocument schema
+plan_metadata = {
+    "schema_version": "1.0",
+    "extraction_model": "ft:gpt4o:zakipoint-health",
+    "extracted_at": datetime.utcnow().isoformat()
+}
+
+# Build all subtables for export
+all_tables = []
+if container_key == "Tables":
+    for idx, tbl in enumerate(updated_containers):
+        all_tables.append({
+            "id": idx,
+            "plan_name": tbl.get("plan_name", ""),
+            "row_header": tbl.get("row_header", ""),
+            "column_header": tbl.get("columns", []),
+            "rows": tbl.get("rows", [])
+        })
+    plan_name = updated_containers[0].get("plan_name", "") if updated_containers else ""
+else:
+    # Single table or categories
+    for idx, tbl in enumerate(updated_containers):
+        all_tables.append({
+            "id": idx,
+            "plan_name": tbl.get("plan_name", ""),
+            "row_header": tbl.get("row_header", ""),
+            "column_header": tbl.get("columns", []),
+            "rows": tbl.get("rows", [])
+        })
+    plan_name = updated_table.get("plan_name", "")
+
+plan_document = {
+    "context_before_table": updated_data.get("context_before_table"),
+    "table": {
+        "plan_name": plan_name,
+        "Tables": all_tables
+    },
+    "context_after_table": updated_data.get("context_after_table"),
+    "metadata": plan_metadata
+}
+
 with st.expander("👁️ Preview Updated JSON", expanded=False):
-    st.json(copy.deepcopy(updated_data))
+    st.json(copy.deepcopy(plan_document))
 
 colA, colB = st.columns([2,1])
 with colA:
@@ -338,11 +372,13 @@ with colA:
         default_filename = f"{base}.updated.json"
     st.download_button(
         label="⬇️ Download updated JSON",
-        data=json.dumps(updated_data, indent=2),
+        data=json.dumps(plan_document, indent=2),
         file_name=default_filename,
         mime="application/json",
     )
-with colB:
-    if st.button("🔄 Reset to Original", help="Reload the original uploaded file and discard all changes."):
-        st.experimental_rerun()
+
+    # ---- Restart JSON Button ----
+    st.markdown("---")
+    if st.button("🔄 Restart JSON (Reload Original)", key="restart_json_btn", help="Reload the original uploaded JSON file. All unsaved changes will be lost."):
+        st.rerun()
 
