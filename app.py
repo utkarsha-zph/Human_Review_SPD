@@ -8,8 +8,8 @@ import os
 from langchain_openai import ChatOpenAI
 import shutil
 
-from ingestion.parsing.table.mllm_parsing.mllm_parser import MllmParser
-from global_utils.logger import setup_logger
+#from ingestion.parsing.table.mllm_parsing.mllm_parser import MllmParser
+#from global_utils.logger import setup_logger
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -371,68 +371,69 @@ async def ingest_table_with_mllm(plan_document: Dict) -> None:
     Args:
         plan_document: The JSON document containing table data to ingest
     """
-    temp_dir = os.path.abspath("temp")
-    temp_file = os.path.join(temp_dir, "table_data.json")
-    try:
-        # Setup logging
-        logger = setup_logger("mllm_ingestion")
+    # temp_dir = os.path.abspath("temp")
+    # temp_file = os.path.join(temp_dir, "table_data.json")
+    # try:
+    #     # Setup logging
+    #     logger = setup_logger("mllm_ingestion")
         
-        # Get LLM instance
-        llm = ChatOpenAI(
-            model="ft:gpt-4o-2024-08-06:zakipoint-health::BoofB2Q5",
-            temperature=0.0,
-            api_key= os.getenv("OPENAI_API_KEY"),
-        )
+    #     # Get LLM instance
+    #     llm = ChatOpenAI(
+    #         model="ft:gpt-4o-2024-08-06:zakipoint-health::BoofB2Q5",
+    #         temperature=0.0,
+    #         api_key= os.getenv("OPENAI_API_KEY"),
+    #     )
         
-        # Create temp directory if it doesn't exist
-        os.makedirs(temp_dir, exist_ok=True)
+    #     # Create temp directory if it doesn't exist
+    #     os.makedirs(temp_dir, exist_ok=True)
         
-        # Save the plan document
-        with open(temp_file, "w", encoding='utf-8') as f:
-            json.dump(plan_document, f, indent=2, ensure_ascii=False)
+    #     # Save the plan document
+    #     with open(temp_file, "w", encoding='utf-8') as f:
+    #         json.dump(plan_document, f, indent=2, ensure_ascii=False)
         
-        # Process with MLLM parser
-        async with MllmParser.from_defaults(
-            table_file=temp_file,
-            llm=llm,
-            output_dir=os.path.join(temp_dir, "output"),
-            json_out_dir=os.path.join(temp_dir, "json_output"),
-            logger=logger,
-            parse_pdf=False  
-        ) as parser:
-            # Extract table data directly from the JSON
-            table_data = plan_document.get("table", {})
-            if not table_data:
-                st.error("No table data found in the document")
-                return
+    #     # Process with MLLM parser
+    #     async with MllmParser.from_defaults(
+    #         table_file=temp_file,
+    #         llm=llm,
+    #         output_dir=os.path.join(temp_dir, "output"),
+    #         json_out_dir=os.path.join(temp_dir, "json_output"),
+    #         logger=logger,
+    #         parse_pdf=False  
+    #     ) as parser:
+    #         # Extract table data directly from the JSON
+    #         table_data = plan_document.get("table", {})
+    #         if not table_data:
+    #             st.error("No table data found in the document")
+    #             return
                 
-            # Process the table data
-            results = await parser.summarize_json(
-                file_page_pairs=[(temp_file, 1)],  
-                json_out_dir=os.path.join(temp_dir, "json_output"),
-                division_id="temp_div"
-            )
+    #         # Process the table data
+    #         results = await parser.summarize_json(
+    #             file_page_pairs=[(temp_file, 1)],  
+    #             json_out_dir=os.path.join(temp_dir, "json_output"),
+    #             division_id="temp_div"
+    #         )
             
-            if results:
-                st.success("Successfully processed table with MLLM parser")
-                st.write("Results:")
-                st.json(results)
-            else:
-                st.error("No results generated from MLLM parsing")
-    except Exception as e:
-        st.error(f"Error during MLLM processing: {str(e)}")
-        logger.error(f"MLLM processing error: {e}", exc_info=True)
-    finally:
-        # Cleanup temp files
-        try:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            if os.path.exists(os.path.join(temp_dir, "output")):
-                shutil.rmtree(os.path.join(temp_dir, "output"))
-            if os.path.exists(os.path.join(temp_dir, "json_output")):
-                shutil.rmtree(os.path.join(temp_dir, "json_output"))
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temp files: {e}")
+    #         if results:
+    #             st.success("Successfully processed table with MLLM parser")
+    #             st.write("Results:")
+    #             st.json(results)
+    #         else:
+    #             st.error("No results generated from MLLM parsing")
+    # except Exception as e:
+    #     st.error(f"Error during MLLM processing: {str(e)}")
+    #     logger.error(f"MLLM processing error: {e}", exc_info=True)
+    # finally:
+    #     # Cleanup temp files
+    #     try:
+    #         if os.path.exists(temp_file):
+    #             os.remove(temp_file)
+    #         if os.path.exists(os.path.join(temp_dir, "output")):
+    #             shutil.rmtree(os.path.join(temp_dir, "output"))
+    #         if os.path.exists(os.path.join(temp_dir, "json_output")):
+    #             shutil.rmtree(os.path.join(temp_dir, "json_output"))
+    #     except Exception as e:
+    #         logger.warning(f"Failed to cleanup temp files: {e}")
+    pass
 
 def handle_export(plan_document: Dict, uploaded_file: Any) -> None:
     """Handle the export interface."""
