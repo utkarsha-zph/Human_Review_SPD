@@ -10,9 +10,9 @@ import shutil
 
 #from ingestion.parsing.table.mllm_parsing.mllm_parser import MllmParser
 #from global_utils.logger import setup_logger
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 
-load_dotenv()
+#load_dotenv()
 
 def apply_custom_styles() -> None:
     """Apply custom CSS styles to the Streamlit app."""
