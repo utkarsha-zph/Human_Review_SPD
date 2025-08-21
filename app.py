@@ -8,11 +8,11 @@ import os
 from langchain_openai import ChatOpenAI
 import shutil
 
-#from ingestion.parsing.table.mllm_parsing.mllm_parser import MllmParser
-#from global_utils.logger import setup_logger
-#from dotenv import load_dotenv
+from ingestion.parsing.table.mllm_parsing.mllm_parser import MllmParser
+from global_utils.logger import setup_logger
+from dotenv import load_dotenv
 
-#load_dotenv()
+load_dotenv()
 
 def apply_custom_styles() -> None:
     """Apply custom CSS styles to the Streamlit app."""
@@ -366,11 +366,11 @@ def create_plan_document(updated_data: Dict, containers: List[Dict], container_k
         return plan_document
 
 async def ingest_table_with_mllm(plan_document: Dict) -> None:
-    """
-    Ingest table data using MLLM parser with parse_pdf=False.
-    Args:
-        plan_document: The JSON document containing table data to ingest
-    """
+    # """
+    # Ingest table data using MLLM parser with parse_pdf=False.
+    # Args:
+    #     plan_document: The JSON document containing table data to ingest
+    # """
     # temp_dir = os.path.abspath("temp")
     # temp_file = os.path.join(temp_dir, "table_data.json")
     # try:
@@ -433,6 +433,7 @@ async def ingest_table_with_mllm(plan_document: Dict) -> None:
     #             shutil.rmtree(os.path.join(temp_dir, "json_output"))
     #     except Exception as e:
     #         logger.warning(f"Failed to cleanup temp files: {e}")
+    st.write("Not a Main Pipeline Code...Demo app only.")
     pass
 
 def handle_export(plan_document: Dict, uploaded_file: Any) -> None:
@@ -521,11 +522,27 @@ def main():
     st.markdown("---")
     st.subheader("✏️ Select a file to edit")
     file_names = [f["name"] for f in file_data]
+    
+    # Store the last selected file index
+    if "last_file_idx" not in st.session_state:
+        st.session_state["last_file_idx"] = 0
+        
     selected_file_idx = st.selectbox(
         "Choose a file to edit", 
         options=range(len(file_names)), 
-        format_func=lambda i: file_names[i]
+        format_func=lambda i: file_names[i],
+        key="file_selector"
     )
+    
+    # Clear session state when file changes
+    if st.session_state.get("last_file_idx") != selected_file_idx:
+        # Reset all table-related session state
+        keys_to_clear = ["df", "column_header", "row_format", "last_selected_index"]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state["last_file_idx"] = selected_file_idx
+    
     selected_file = file_data[selected_file_idx]
     data = selected_file["data"]
     uploaded_file = selected_file["file"]
