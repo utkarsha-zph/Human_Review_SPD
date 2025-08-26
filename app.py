@@ -5,8 +5,11 @@ from datetime import datetime, timezone
 import copy
 from typing import List, Dict, Any, Tuple, Optional
 import os
-from langchain_openai import ChatOpenAI
-import shutil
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def apply_custom_styles() -> None:
@@ -27,12 +30,13 @@ def apply_custom_styles() -> None:
         unsafe_allow_html=True,
     )
 
+
 def setup_sidebar() -> None:
     """Set up the sidebar with logo and information."""
-    st.sidebar.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", width=180)
+    st.sidebar.image("logo/zph-blue.png", width=250)
     st.sidebar.markdown(
         """
-        ### 📝 Human Feedback Table Editor
+        ### 📝 SPD: Table Parsing / Human Feedback
         - Upload your JSON file
         - Select a category
         - Edit headers, plan and table cells
@@ -40,6 +44,7 @@ def setup_sidebar() -> None:
         """
     )
     st.sidebar.info("All changes are local until you download the file.")
+
 
 def setup_page() -> None:
     """Configure the page layout and title."""
@@ -54,8 +59,12 @@ def setup_page() -> None:
         unsafe_allow_html=True,
     )
 
+
 def handle_file_upload() -> List[Dict]:
-    """Handle file upload and return parsed JSON data."""
+    """Handle file upload and return parsed JSON data.
+    - If a previously saved version exists in temp/output/json_output, load that instead of the uploaded file so previous edits are preserved.
+    - Store a file map in session_state to keep track of the loaded path and original filename.
+    """
     st.markdown("---")
     with st.container():
         st.subheader("\U0001F4E4Upload JSON files")
@@ -70,14 +79,62 @@ def handle_file_upload() -> List[Dict]:
             st.stop()
 
         file_data = []
+        output_dir = os.path.join("temp/output", "json_output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # initialize a map of filename -> {path, data}
+        if "file_map" not in st.session_state:
+            st.session_state["file_map"] = {}
+
         for uploaded_file in uploaded_files:
             try:
-                data = json.loads(uploaded_file.getvalue().decode("utf-8"))
-                file_data.append({"name": uploaded_file.name, "data": data, "file": uploaded_file})
+                safe_name = Path(uploaded_file.name).name
+                saved_path = os.path.join(output_dir, safe_name)
+
+                if os.path.exists(saved_path):
+                    try:
+                        with open(saved_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        source = "saved"
+                    except Exception:
+                        # fallback to uploaded content if saved file cannot be read
+                        data = json.loads(uploaded_file.getvalue().decode("utf-8"))
+                        source = "uploaded"
+                else:
+                    data = json.loads(uploaded_file.getvalue().decode("utf-8"))
+                    source = "uploaded"
+
+                # Save the file to temp/output_json (this will overwrite uploaded on first upload)
+                try:
+                    tmp_path = saved_path + ".tmp"
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                    os.replace(tmp_path, saved_path)
+                except Exception:
+                    # if we cannot write the canonical copy, proceed but warn
+                    st.warning(f"Could not write canonical copy for {safe_name}")
+
+                # Store the current file path in session state
+                st.session_state["current_file_path"] = saved_path
+
+                # also store mapping for reload & lookups
+                st.session_state["file_map"][safe_name] = {
+                    "path": saved_path,
+                    "data": data,
+                    "original_filename": uploaded_file.name,
+                    "source": source
+                }
+
+                file_data.append({
+                    "name": safe_name,
+                    "data": data,
+                    "file": uploaded_file,
+                    "path": saved_path
+                })
             except Exception as e:
                 st.error(f"Failed to parse {uploaded_file.name}: {e}")
-        
         return file_data
+
 
 def extract_containers(data: Dict) -> Tuple[List[Dict], List[Tuple[str, Optional[int]]], Optional[str]]:
     """Extract table containers from the JSON data."""
@@ -102,8 +159,9 @@ def extract_containers(data: Dict) -> Tuple[List[Dict], List[Tuple[str, Optional
                 containers.append(copy.deepcopy(cat))
                 container_map.append(("category", idx))
             container_key = "categories"
-    
+
     return containers, container_map, container_key
+
 
 def make_unique_names(headers: List[str]) -> List[str]:
     """Create unique column names from headers."""
@@ -119,6 +177,7 @@ def make_unique_names(headers: List[str]) -> List[str]:
         seen[name] = True
         unique.append(name)
     return unique
+
 
 def process_headers(table_data: Dict) -> Tuple[List[str], List[str], int]:
     """Process and validate table headers."""
@@ -143,6 +202,7 @@ def process_headers(table_data: Dict) -> Tuple[List[str], List[str], int]:
     
     unique_colnames = make_unique_names(headers)
     return headers, unique_colnames, max_cols
+
 
 def create_dataframe(table_data: Dict, headers: List[str]) -> pd.DataFrame:
     """Create a pandas DataFrame from table data."""
@@ -174,6 +234,7 @@ def create_dataframe(table_data: Dict, headers: List[str]) -> pd.DataFrame:
         return pd.DataFrame(columns=make_unique_names(headers))
     return pd.DataFrame(normalized_rows, columns=make_unique_names(headers)).fillna("")
 
+
 def rebuild_table_data(edited_df: pd.DataFrame, headers: List[str], row_format: str) -> List[Any]:
     """Rebuild table data from edited DataFrame."""
     rebuilt_rows = []
@@ -202,6 +263,7 @@ def rebuild_table_data(edited_df: pd.DataFrame, headers: List[str], row_format: 
             rebuilt_rows.append([key_str] + values)
     
     return rebuilt_rows
+
 
 def handle_table_editing(table_data: Dict) -> Tuple[Dict, List[str]]:
     """Handle the table editing interface."""
@@ -261,23 +323,7 @@ def handle_table_editing(table_data: Dict) -> Tuple[Dict, List[str]]:
     )
     st.session_state["column_header"] = edited_headers.iloc[0].tolist()
 
-    # Table editing
-    st.markdown("---")
-    st.subheader("📋 Table Cells")
-    st.caption("Edit the table cells below. All changes are instantly reflected in the export preview.")
-    add_row = st.button("➕ Add Row", key="add_row_btn", help="Add a new empty row to the table.")
-
-    if add_row:
-        empty_row = ["" for _ in range(len(st.session_state["df"].columns))]
-        st.session_state["df"] = pd.concat(
-            [st.session_state["df"], 
-             pd.DataFrame([empty_row], columns=st.session_state["df"].columns)], 
-            ignore_index=True
-        )
-        # Update the source table data with the new row
-        empty_row_data = {"key": "", "values": ["" for _ in range(len(st.session_state["column_header"])-1)]} if st.session_state["row_format"] == "dict" else [""] * len(st.session_state["column_header"])
-        table_data["rows"].append(empty_row_data)
-
+    st.caption("Edit the table cells below. You can add or remove rows as needed.")
     edited_df = st.data_editor(
         st.session_state["df"],
         num_rows="dynamic",
@@ -299,6 +345,7 @@ def handle_table_editing(table_data: Dict) -> Tuple[Dict, List[str]]:
     table_data.update(updated_table)
 
     return updated_table, headers
+
 
 def create_plan_document(updated_data: Dict, containers: List[Dict], container_key: str) -> Dict:
     """Create the final plan document for export."""
@@ -360,76 +407,90 @@ def create_plan_document(updated_data: Dict, containers: List[Dict], container_k
         plan_document["metadata"] = plan_metadata
         return plan_document
 
-async def ingest_table_with_mllm(plan_document: Dict) -> None:
-    # """
-    # Ingest table data using MLLM parser with parse_pdf=False.
-    # Args:
-    #     plan_document: The JSON document containing table data to ingest
-    # """
-    # temp_dir = os.path.abspath("temp")
-    # temp_file = os.path.join(temp_dir, "table_data.json")
-    # try:
-    #     # Setup logging
-    #     logger = setup_logger("mllm_ingestion")
+# TODO: Add Ingestion Logic Into Streamlit app
+# async def ingest_table_with_mllm(plan_document: Dict) -> None:
+#     """
+#     Ingest table data using MLLM parser with parse_pdf=False.
+#     Args:
+#         plan_document: The JSON document containing table data to ingest
+#     """
+#     temp_dir = os.path.abspath("temp")
+#     temp_file = os.path.join(temp_dir, "table_data.json")
+#     try:
+#         # Setup logging
+#         logger = setup_logger("mllm_ingestion")
         
-    #     # Get LLM instance
-    #     llm = ChatOpenAI(
-    #         model="ft:gpt-4o-2024-08-06:zakipoint-health::BoofB2Q5",
-    #         temperature=0.0,
-    #         api_key= os.getenv("OPENAI_API_KEY"),
-    #     )
+#         # Get LLM instance
+#         llm = ChatOpenAI(
+#             model="ft:gpt-4o-2024-08-06:zakipoint-health::BoofB2Q5",
+#             temperature=0.0,
+#             api_key= os.getenv("OPENAI_API_KEY"),
+#         )
         
-    #     # Create temp directory if it doesn't exist
-    #     os.makedirs(temp_dir, exist_ok=True)
+#         # Create temp directory if it doesn't exist
+#         os.makedirs(temp_dir, exist_ok=True)
         
-    #     # Save the plan document
-    #     with open(temp_file, "w", encoding='utf-8') as f:
-    #         json.dump(plan_document, f, indent=2, ensure_ascii=False)
+#         # Save the plan document
+#         with open(temp_file, "w", encoding='utf-8') as f:
+#             json.dump(plan_document, f, indent=2, ensure_ascii=False)
         
-    #     # Process with MLLM parser
-    #     async with MllmParser.from_defaults(
-    #         table_file=temp_file,
-    #         llm=llm,
-    #         output_dir=os.path.join(temp_dir, "output"),
-    #         json_out_dir=os.path.join(temp_dir, "json_output"),
-    #         logger=logger,
-    #         parse_pdf=False  
-    #     ) as parser:
-    #         # Extract table data directly from the JSON
-    #         table_data = plan_document.get("table", {})
-    #         if not table_data:
-    #             st.error("No table data found in the document")
-    #             return
+#         # Process with MLLM parser
+#         async with MllmParser.from_defaults(
+#             table_file=temp_file,
+#             llm=llm,
+#             output_dir=os.path.join(temp_dir, "output"),
+#             json_out_dir=os.path.join(temp_dir, "json_output"),
+#             logger=logger,
+#             parse_pdf=False  
+#         ) as parser:
+#             # Extract table data directly from the JSON
+#             table_data = plan_document.get("table", {})
+#             if not table_data:
+#                 st.error("No table data found in the document")
+#                 return
                 
-    #         # Process the table data
-    #         results = await parser.summarize_json(
-    #             file_page_pairs=[(temp_file, 1)],  
-    #             json_out_dir=os.path.join(temp_dir, "json_output"),
-    #             division_id="temp_div"
-    #         )
+#             # Process the table data
+#             results = await parser.summarize_json(
+#                 file_page_pairs=[(temp_file, 1)],  
+#                 json_out_dir=os.path.join(temp_dir, "json_output"),
+#                 division_id="temp_div"
+#             )
             
-    #         if results:
-    #             st.success("Successfully processed table with MLLM parser")
-    #             st.write("Results:")
-    #             st.json(results)
-    #         else:
-    #             st.error("No results generated from MLLM parsing")
-    # except Exception as e:
-    #     st.error(f"Error during MLLM processing: {str(e)}")
-    #     logger.error(f"MLLM processing error: {e}", exc_info=True)
-    # finally:
-    #     # Cleanup temp files
-    #     try:
-    #         if os.path.exists(temp_file):
-    #             os.remove(temp_file)
-    #         if os.path.exists(os.path.join(temp_dir, "output")):
-    #             shutil.rmtree(os.path.join(temp_dir, "output"))
-    #         if os.path.exists(os.path.join(temp_dir, "json_output")):
-    #             shutil.rmtree(os.path.join(temp_dir, "json_output"))
-    #     except Exception as e:
-    #         logger.warning(f"Failed to cleanup temp files: {e}")
-    st.write("Not a Main Pipeline Code...Demo app only.")
-    pass
+#             if results:
+#                 st.success("Successfully processed table with MLLM parser")
+#                 st.write("Results:")
+#                 st.json(results)
+#             else:
+#                 st.error("No results generated from MLLM parsing")
+#     except Exception as e:
+#         st.error(f"Error during MLLM processing: {str(e)}")
+#         logger.error(f"MLLM processing error: {e}", exc_info=True)
+#     finally:
+#         # Cleanup temp files
+#         try:
+#             if os.path.exists(temp_file):
+#                 os.remove(temp_file)
+#             if os.path.exists(os.path.join(temp_dir, "output")):
+#                 shutil.rmtree(os.path.join(temp_dir, "output"))
+#             if os.path.exists(os.path.join(temp_dir, "json_output")):
+#                 shutil.rmtree(os.path.join(temp_dir, "json_output"))
+#         except Exception as e:
+#             logger.warning(f"Failed to cleanup temp files: {e}")
+
+
+def save_json_file(file_path: str, data: Dict) -> None:
+    """Save JSON data to a file, overwriting if it exists."""
+    try:
+        #atomic write to avoid partial files
+        tmp_path = file_path + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, file_path)
+
+        st.success(f"Successfully saved to {os.path.basename(file_path)}")
+    except Exception as e:
+        st.error(f"Failed to save file: {str(e)}")
+
 
 def handle_export(plan_document: Dict, uploaded_file: Any) -> None:
     """Handle the export interface."""
@@ -440,7 +501,41 @@ def handle_export(plan_document: Dict, uploaded_file: Any) -> None:
         st.json(copy.deepcopy(plan_document))
 
     colA, colB, colC = st.columns([2, 1, 1])
+    
+    # Save button to overwrite the file in temp/output_json
     with colA:
+        if "current_file_path" in st.session_state and st.button("💾 Save Changes", 
+            help="Save and overwrite the current file in temp/output_json directory"):
+            
+            # Ensure we have a valid uploaded file
+            if uploaded_file is None or not hasattr(uploaded_file, "name"):
+                st.error("No uploaded file available to overwrite.")
+            else:
+                # Sanitize filename to avoid path traversal and keep only basename.
+                safe_name = Path(uploaded_file.name).name 
+
+                # Ensure target directory exists.
+                out_dir = os.path.join("temp/output", "json_output")  
+                os.makedirs(out_dir, exist_ok=True)  
+
+                save_path = os.path.join(out_dir, safe_name)  
+                try:
+                    save_json_file(save_path, plan_document)
+
+                    # update session_state and file_map to point to the new saved file
+                    st.session_state["current_file_path"] = save_path
+                    if "file_map" not in st.session_state:
+                        st.session_state["file_map"] = {}
+                    st.session_state["file_map"][safe_name] = {
+                        "path": save_path,
+                        "data": plan_document,
+                        "original_filename": uploaded_file.name,
+                        "source": "saved"
+                    }
+                except Exception as e:
+                    st.error(f"Failed to save file: {e}")  
+    
+    with colB:
         default_filename = "updated_table.json"
         if uploaded_file is not None and hasattr(uploaded_file, "name"):
             base = uploaded_file.name.rsplit(".", 1)[0]
@@ -455,8 +550,7 @@ def handle_export(plan_document: Dict, uploaded_file: Any) -> None:
     with colC:
         if st.button("🔄 Ingest with MLLM Parser", key="ingest_mllm"):
             st.write("Processing table with MLLM parser...")
-            import asyncio
-            asyncio.run(ingest_table_with_mllm(plan_document))
+            # asyncio.run(ingest_table_with_mllm(plan_document))
 
         st.markdown("---")
         if st.button(
@@ -464,7 +558,33 @@ def handle_export(plan_document: Dict, uploaded_file: Any) -> None:
             key="restart_json_btn", 
             help="Reload the original uploaded JSON file. All unsaved changes will be lost."
         ):
-            st.rerun()
+            # reload from saved canonical copy if available, else from original uploaded file
+            reload_path = None
+            if uploaded_file is not None and hasattr(uploaded_file, "name"):
+                safe_name = Path(uploaded_file.name).name
+                if "file_map" in st.session_state and safe_name in st.session_state["file_map"]:
+                    reload_path = st.session_state["file_map"][safe_name].get("path")
+
+            try:
+                if reload_path and os.path.exists(reload_path):
+                    with open(reload_path, 'r', encoding='utf-8') as f:
+                        reloaded = json.load(f)
+                    # Replace the current streamlit session values for df/column_header
+                    if "df" in st.session_state:
+                        del st.session_state["df"]
+                    if "column_header" in st.session_state:
+                        del st.session_state["column_header"]
+                    # Overwrite the uploaded file's data in-place to reflect reload
+                    st.experimental_set_query_params()  # no-op to ensure some state-change
+                    st.session_state["last_file_idx"] = st.session_state.get("last_file_idx", 0)
+                    st.experimental_rerun()
+                else:
+                    # fallback: simply rerun to reload original uploaded context
+                    st.experimental_rerun()
+
+            except Exception as e:
+                st.error(f"Failed to reload file: {e}")
+
 
 def reset_session_state(selected_index: int) -> None:
     """Reset session state when category changes."""
@@ -477,6 +597,7 @@ def reset_session_state(selected_index: int) -> None:
         if "column_header" in st.session_state:
             del st.session_state["column_header"]
         st.session_state["last_selected_index"] = selected_index
+
 
 def update_data_structure(data: Dict, updated_table: Dict, containers: List[Dict], 
                          container_map: List[Tuple[str, Optional[int]]], selected_index: int) -> Dict:
@@ -501,10 +622,12 @@ def update_data_structure(data: Dict, updated_table: Dict, containers: List[Dict
     if isinstance(updated_data.get("table"), dict) and updated_data["table"].get("plan_name") is not None:
         updated_data["table"]["plan_name"] = updated_containers[0].get("plan_name")
 
+    # Preserve context_before_table / context_after_table
     updated_data.setdefault("context_before_table", data.get("context_before_table"))
     updated_data.setdefault("context_after_table", data.get("context_after_table"))
 
     return updated_data
+
 
 def main():
     """Main application function."""
@@ -539,8 +662,23 @@ def main():
         st.session_state["last_file_idx"] = selected_file_idx
     
     selected_file = file_data[selected_file_idx]
-    data = selected_file["data"]
-    uploaded_file = selected_file["file"]
+
+    chosen_name = selected_file["name"]
+    if "file_map" in st.session_state and chosen_name in st.session_state["file_map"]:
+        data = st.session_state["file_map"][chosen_name].get("data")
+        # if file_map path exists and the data on disk might have been updated, try to read it
+        disk_path = st.session_state["file_map"][chosen_name].get("path")
+        if disk_path and os.path.exists(disk_path):
+            try:
+                with open(disk_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                # keep in-memory cached data as fallback
+                pass
+        uploaded_file = selected_file["file"]
+    else:
+        data = selected_file["data"]
+        uploaded_file = selected_file["file"]
 
     st.success(f"JSON loaded successfully from {uploaded_file.name}.")
     with st.expander("\U0001F50D View Raw JSON", expanded=False):
