@@ -7,9 +7,6 @@ from typing import List, Dict, Any, Tuple, Optional
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 def apply_custom_styles() -> None:
